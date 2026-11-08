@@ -1,0 +1,100 @@
+# Configuration
+baseURL: https://flamego.dev/
+title: Flamego
+
+enableRobotsTXT: true
+enableGitInfo: true
+enableEmoji: true
+hasCJKLanguage: true
+
+# Multilingual
+defaultContentLanguage: en
+languages:
+  en:
+    label: English
+    weight: 1
+    title: Flamego
+    contentDir: content
+    outputs:
+      home:
+        - html
+        - rss
+        - llms
+    params:
+      editURL:
+        base: https://github.com/flamego/flamego/edit/main/docs/content
+    menus:
+      main:
+        - name: Search
+          weight: 6
+          params:
+            type: search
+        - name: GitHub
+          weight: 7
+          url: https://github.com/flamego/flamego
+          params:
+            icon: github
+  zh:
+    label: 简体中文
+    weight: 2
+    title: Flamego
+    contentDir: content.zh
+    params:
+      editURL:
+        base: https://github.com/flamego/flamego/edit/main/docs/content.zh
+    menus:
+      main:
+        - name: 搜索
+          weight: 6
+          params:
+            type: search
+        - name: GitHub
+          weight: 7
+          url: https://github.com/flamego/flamego
+          params:
+            icon: github
+
+module:
+  imports:
+    - path: github.com/imfing/hextra
+
+outputFormats:
+  llms:
+    mediaType: text/plain
+    baseName: llms
+    isPlainText: true
+    notAlternative: true
+
+markup:
+  goldmark:
+    renderer:
+      unsafe: true
+  highlight:
+    noClasses: false
+
+cascade:
+  - target:
+      kind: page
+    type: docs
+  - target:
+      kind: section
+    type: docs
+
+params:
+  description: A fantastic modular Go web framework boiled with love
+  navbar:
+    displayTitle: true
+    displayLogo: true
+    logo:
+      path: logo.png
+      width: 28
+      height: 28
+  footer:
+    enable: true
+    displayCopyright: true
+    displayPoweredBy: false
+  theme:
+    default: system
+    displayToggle: true
+  editURL:
+    enable: true

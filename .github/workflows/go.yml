@@ -1,0 +1,62 @@
+name: Go
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - '.golangci.yml'
+      - '.github/workflows/go.yml'
+  pull_request:
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - '.golangci.yml'
+      - '.github/workflows/go.yml'
+env:
+  GOPROXY: "https://proxy.golang.org"
+
+jobs:
+  lint:
+    permissions:
+      contents: read       # for actions/checkout to fetch code
+      pull-requests: read  # for golangci/golangci-lint-action to fetch pull requests
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27'
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: latest
+          args: --timeout=30m
+
+  test:
+    name: Test
+    strategy:
+      matrix:
+        platform: [ ubuntu-latest, macos-latest, windows-latest ]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27'
+      - name: Run tests with coverage (windows)
+        if: ${{ matrix.platform == 'windows-latest' }}
+        continue-on-error: true
+        run: go test -shuffle=on -v -race -coverprofile=coverage -covermode=atomic ./...
+      - name: Run tests with coverage (non-windows)
+        if: ${{ matrix.platform != 'windows-latest' }}
+        continue-on-error: true
+        run: |
+          go test -shuffle=on -v -race -coverprofile=coverage -covermode=atomic -json ./... > test-report.json
+          go install github.com/mfridman/tparse@latest
+          tparse -all -file=test-report.json

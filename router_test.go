@@ -1,0 +1,798 @@
+// Copyright 2021 Flamego. All rights reserved.
+// Use of this source code is governed by a MIT-style
+// license that can be found in the LICENSE file.
+
+package flamego
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/flamego/flamego/internal/route"
+	"github.com/flamego/flamego/method"
+)
+
+func TestRouter_Route(t *testing.T) {
+	ctx := newMockContext()
+	contextCreator := func(w http.ResponseWriter, r *http.Request, params route.Params, handlers []Handler, urlPath urlPather) internalContext {
+		ctx.ParamFunc.SetDefaultHook(func(s string) string {
+			return params[s]
+		})
+		return ctx
+	}
+	r := newRouter(contextCreator)
+
+	t.Run("register invalid HTTP method", func(t *testing.T) {
+		defer func() {
+			assert.Contains(t, recover(), "unknown HTTP method:")
+		}()
+
+		r.Route("404", "/", nil)
+	})
+
+	t.Run("request with invalid HTTP method", func(t *testing.T) {
+		resp := httptest.NewRecorder()
+		req, err := http.NewRequest("UNEXPECTED", "/", nil)
+		require.NoError(t, err)
+
+		ctx.run_ = func() {}
+		r.ServeHTTP(resp, req)
+		assert.Equal(t, http.StatusOK, resp.Code)
+	})
+
+	tests := []struct {
+		routePath string
+		method    string
+		add       func(routePath string, handlers ...Handler) *Route
+	}{
+		{
+			routePath: "/get",
+			method:    http.MethodGet,
+			add:       r.Get,
+		},
+		{
+			routePath: "/patch",
+			method:    http.MethodPatch,
+			add:       r.Patch,
+		},
+		{
+			routePath: "/post",
+			method:    http.MethodPost,
+			add:       r.Post,
+		},
+		{
+			routePath: "/put",
+			method:    http.MethodPut,
+			add:       r.Put,
+		},
+		{
+			routePath: "/delete",
+			method:    http.MethodDelete,
+			add:       r.Delete,
+		},
+		{
+			routePath: "/options",
+			method:    http.MethodOptions,
+			add:       r.Options,
+		},
+		{
+			routePath: "/head",
+			method:    http.MethodHead,
+			add:       r.Head,
+		},
+		{
+			routePath: "/connect",
+			method:    http.MethodConnect,
+			add:       r.Connect,
+		},
+		{
+			routePath: "/trace",
+			method:    http.MethodTrace,
+			add:       r.Trace,
+		},
+		{
+			routePath: "/any",
+			method:    http.MethodHead,
+			add:       r.Any,
+		},
+		{
+			routePath: "/users[0]",
+			method:    http.MethodGet,
+			add:       r.Get,
+		},
+		{
+			routePath: "/users:list",
+			method:    http.MethodGet,
+			add:       r.Get,
+		},
+		{
+			routePath: "/choice|fallback",
+			method:    http.MethodGet,
+			add:       r.Get,
+		},
+		{
+			routePath: "/a,b,c",
+			method:    http.MethodGet,
+			add:       r.Get,
+		},
+		{
+			routePath: `/back\slash`,
+			method:    http.MethodGet,
+			add:       r.Get,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.routePath, func(t *testing.T) {
+			test.add(test.routePath, func() {})
+
+			gotRoute := ""
+			ctx.run_ = func() { gotRoute = ctx.Param("route") }
+
+			resp := httptest.NewRecorder()
+			req, err := http.NewRequest(test.method, test.routePath, nil)
+			require.NoError(t, err)
+
+			r.ServeHTTP(resp, req)
+
+			assert.Equal(t, http.StatusOK, resp.Code)
+			assert.Equal(t, test.routePath, gotRoute)
+			assert.Equal(t, test.method+" "+test.routePath, req.Pattern)
+		})
+	}
+
+	t.Run("dynamic route pattern", func(t *testing.T) {
+		r.Get("/users/{id}", func() {})
+
+		gotRoute := ""
+		ctx.run_ = func() { gotRoute = ctx.Param("route") }
+
+		resp := httptest.NewRecorder()
+		req, err := http.NewRequest(http.MethodGet, "/users/42", nil)
+		require.NoError(t, err)
+
+		r.ServeHTTP(resp, req)
+
+		assert.Equal(t, http.StatusOK, resp.Code)
+		assert.Equal(t, "/users/{id}", gotRoute)
+		assert.Equal(t, "GET /users/{id}", req.Pattern)
+	})
+}
+
+func TestRouter_Routes(t *testing.T) {
+	ctx := newMockContext()
+	contextCreator := func(_ http.ResponseWriter, _ *http.Request, params route.Params, _ []Handler, _ urlPather) internalContext {
+		ctx.ParamFunc.SetDefaultHook(func(s string) string {
+			return params[s]
+		})
+		return ctx
+	}
+
+	t.Run("use single string", func(t *testing.T) {
+		r := newRouter(contextCreator)
+
+		r.Routes("/routes", "GET,POST", func() {})
+
+		for _, m := range []string{http.MethodGet, http.MethodPost} {
+			gotRoute := ""
+			ctx.run_ = func() { gotRoute = ctx.Param("route") }
+
+			resp := httptest.NewRecorder()
+			req, err := http.NewRequest(m, "/routes", nil)
+			require.NoError(t, err)
+
+			r.ServeHTTP(resp, req)
+
+			assert.Equal(t, http.StatusOK, resp.Code)
+			assert.Equal(t, "/routes", gotRoute)
+		}
+	})
+
+	t.Run("use multiple strings", func(t *testing.T) {
+		r := newRouter(contextCreator)
+
+		r.Routes("/routes", http.MethodGet, http.MethodPost, func() {})
+
+		for _, m := range []string{http.MethodGet, http.MethodPost} {
+			gotRoute := ""
+			ctx.run_ = func() { gotRoute = ctx.Param("route") }
+
+			resp := httptest.NewRecorder()
+			req, err := http.NewRequest(m, "/routes", nil)
+			require.NoError(t, err)
+
+			r.ServeHTTP(resp, req)
+
+			assert.Equal(t, http.StatusOK, resp.Code)
+			assert.Equal(t, "/routes", gotRoute)
+		}
+	})
+
+	t.Run("route modifiers apply to every method", func(t *testing.T) {
+		f := New()
+		f.Routes("/routes", "GET,POST", func() {}).Headers("X-Match", "yes")
+
+		for _, m := range []string{http.MethodGet, http.MethodPost} {
+			resp := httptest.NewRecorder()
+			req, err := http.NewRequest(m, "/routes", nil)
+			require.NoError(t, err)
+			f.ServeHTTP(resp, req)
+			assert.Equal(t, http.StatusNotFound, resp.Code)
+
+			resp = httptest.NewRecorder()
+			req, err = http.NewRequest(m, "/routes", nil)
+			require.NoError(t, err)
+			req.Header.Set("X-Match", "yes")
+			f.ServeHTTP(resp, req)
+			assert.Equal(t, http.StatusOK, resp.Code)
+		}
+	})
+}
+
+func TestRouter_Methods(t *testing.T) {
+	t.Run("empty method set", func(t *testing.T) {
+		f := New()
+		assert.PanicsWithValue(t, "empty method set", func() {
+			f.Methods("/", 0, func() {})
+		})
+	})
+
+	t.Run("unknown method set bits", func(t *testing.T) {
+		f := New()
+		assert.PanicsWithValue(t, "unknown method set bits: 512", func() {
+			f.Methods("/", method.Set(1<<9), func() {})
+		})
+	})
+
+	t.Run("selected methods", func(t *testing.T) {
+		f := New()
+		f.Methods("/", method.Get|method.Post, func() string {
+			return "matched"
+		})
+
+		for _, m := range []string{http.MethodGet, http.MethodPost} {
+			resp := httptest.NewRecorder()
+			req, err := http.NewRequest(m, "/", nil)
+			require.NoError(t, err)
+
+			f.ServeHTTP(resp, req)
+
+			assert.Equal(t, http.StatusOK, resp.Code)
+			assert.Equal(t, "matched", resp.Body.String())
+		}
+
+		resp := httptest.NewRecorder()
+		req, err := http.NewRequest(http.MethodPut, "/", nil)
+		require.NoError(t, err)
+		f.ServeHTTP(resp, req)
+		assert.Equal(t, http.StatusNotFound, resp.Code)
+	})
+
+	t.Run("all methods", func(t *testing.T) {
+		f := New()
+		f.Methods("/", method.All, func() {})
+
+		for _, m := range httpMethods {
+			resp := httptest.NewRecorder()
+			req, err := http.NewRequest(m, "/", nil)
+			require.NoError(t, err)
+			f.ServeHTTP(resp, req)
+			assert.Equal(t, http.StatusOK, resp.Code)
+		}
+	})
+
+	t.Run("route modifiers apply to every method", func(t *testing.T) {
+		f := New()
+		f.Methods("/", method.Get|method.Post, func() {}).Headers("X-Match", "yes")
+
+		for _, m := range []string{http.MethodGet, http.MethodPost} {
+			resp := httptest.NewRecorder()
+			req, err := http.NewRequest(m, "/", nil)
+			require.NoError(t, err)
+			f.ServeHTTP(resp, req)
+			assert.Equal(t, http.StatusNotFound, resp.Code)
+
+			resp = httptest.NewRecorder()
+			req, err = http.NewRequest(m, "/", nil)
+			require.NoError(t, err)
+			req.Header.Set("X-Match", "yes")
+			f.ServeHTTP(resp, req)
+			assert.Equal(t, http.StatusOK, resp.Code)
+		}
+	})
+}
+
+func TestRouter_AutoHead(t *testing.T) {
+	ctx := newMockContext()
+	contextCreator := func(_ http.ResponseWriter, _ *http.Request, params route.Params, _ []Handler, _ urlPather) internalContext {
+		ctx.ParamFunc.SetDefaultHook(func(s string) string {
+			return params[s]
+		})
+		return ctx
+	}
+
+	t.Run("no auto head", func(t *testing.T) {
+		r := newRouter(contextCreator)
+		r.Get("/", func() {})
+
+		gotRoute := ""
+		ctx.run_ = func() { gotRoute = ctx.Param("route") }
+
+		resp := httptest.NewRecorder()
+		req, err := http.NewRequest(http.MethodHead, "/", nil)
+		require.NoError(t, err)
+
+		r.ServeHTTP(resp, req)
+
+		assert.Equal(t, http.StatusOK, resp.Code)
+		assert.Equal(t, "", gotRoute)
+	})
+
+	t.Run("has auto head", func(t *testing.T) {
+		r := newRouter(contextCreator)
+		r.AutoHead(true)
+		r.Get("/", func() {})
+
+		gotRoute := ""
+		ctx.run_ = func() { gotRoute = ctx.Param("route") }
+
+		resp := httptest.NewRecorder()
+		req, err := http.NewRequest(http.MethodHead, "/", nil)
+		require.NoError(t, err)
+
+		r.ServeHTTP(resp, req)
+
+		assert.Equal(t, http.StatusOK, resp.Code)
+		assert.Equal(t, "/", gotRoute)
+	})
+
+	t.Run("route modifiers apply to auto head", func(t *testing.T) {
+		f := New()
+		f.AutoHead(true)
+		f.Get("/", func() {}).Headers("X-Match", "yes")
+
+		resp := httptest.NewRecorder()
+		req, err := http.NewRequest(http.MethodHead, "/", nil)
+		require.NoError(t, err)
+		f.ServeHTTP(resp, req)
+		assert.Equal(t, http.StatusNotFound, resp.Code)
+
+		resp = httptest.NewRecorder()
+		req, err = http.NewRequest(http.MethodHead, "/", nil)
+		require.NoError(t, err)
+		req.Header.Set("X-Match", "yes")
+		f.ServeHTTP(resp, req)
+		assert.Equal(t, http.StatusOK, resp.Code)
+	})
+
+	t.Run("explicit head before get does not panic", func(t *testing.T) {
+		f := New()
+		f.AutoHead(true)
+		f.Head("/", func() string { return "head" })
+		assert.NotPanics(t, func() {
+			f.Get("/", func() string { return "get" })
+		})
+
+		for _, m := range []string{http.MethodGet, http.MethodHead} {
+			resp := httptest.NewRecorder()
+			req, err := http.NewRequest(m, "/", nil)
+			require.NoError(t, err)
+			f.ServeHTTP(resp, req)
+			assert.Equal(t, http.StatusOK, resp.Code)
+		}
+	})
+
+	t.Run("auto head applies to Methods", func(t *testing.T) {
+		f := New()
+		f.AutoHead(true)
+		assert.NotPanics(t, func() {
+			f.Methods("/", method.Head, func() {})
+			f.Methods("/", method.Get, func() {})
+		})
+
+		resp := httptest.NewRecorder()
+		req, err := http.NewRequest(http.MethodHead, "/", nil)
+		require.NoError(t, err)
+		f.ServeHTTP(resp, req)
+		assert.Equal(t, http.StatusOK, resp.Code)
+	})
+}
+
+func TestRouter_DuplicatedRoutes(t *testing.T) {
+	contextCreator := func(w http.ResponseWriter, r *http.Request, params route.Params, handlers []Handler, urlPath urlPather) internalContext {
+		return newMockContext()
+	}
+	r := newRouter(contextCreator)
+
+	r.Get("/", func() {})
+
+	defer func() {
+		assert.Contains(t, recover(), "duplicated route")
+	}()
+	r.Get("/", func() {})
+}
+
+func TestRoute_Headers(t *testing.T) {
+	f := New()
+	f.Get("/", func() {}).Headers("Server", "Caddy", "Cache-Control", "")
+
+	t.Run("ok", func(t *testing.T) {
+		resp := httptest.NewRecorder()
+		req, err := http.NewRequest(http.MethodGet, "/", nil)
+		require.NoError(t, err)
+
+		req.Header.Set("Server", "Caddy")
+		req.Header.Set("Cache-Control", "No-Cache")
+		f.ServeHTTP(resp, req)
+
+		assert.Equal(t, http.StatusOK, resp.Code)
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		resp := httptest.NewRecorder()
+		req, err := http.NewRequest(http.MethodGet, "/", nil)
+		require.NoError(t, err)
+
+		req.Header.Set("Server", "Caddy")
+		f.ServeHTTP(resp, req)
+
+		assert.Equal(t, http.StatusNotFound, resp.Code)
+	})
+}
+
+func TestRoute_Match(t *testing.T) {
+	t.Run("nil predicate panics", func(t *testing.T) {
+		f := New()
+		defer func() {
+			assert.Equal(t, "nil predicate function", recover())
+		}()
+		f.Get("/", func() {}).Match(nil)
+	})
+
+	t.Run("predicate true matches", func(t *testing.T) {
+		f := New()
+		f.Get("/", func() {}).Match(func(*http.Request) bool { return true })
+
+		resp := httptest.NewRecorder()
+		req, err := http.NewRequest(http.MethodGet, "/", nil)
+		require.NoError(t, err)
+
+		f.ServeHTTP(resp, req)
+		assert.Equal(t, http.StatusOK, resp.Code)
+	})
+
+	t.Run("predicate false falls through to lower-priority sibling leaf", func(t *testing.T) {
+		// A regex leaf has higher matching priority than a placeholder leaf at
+		// the same tree node. With a failing predicate on the regex leaf, the
+		// tree must continue to the placeholder leaf rather than halt.
+		f := New()
+		called := ""
+		f.Get("/{id: /[0-9]+/}", func(c Context) {
+			called = "regex:" + c.Param("id")
+		}).Match(func(r *http.Request) bool {
+			return r.Header.Get("X-Special") == "yes"
+		})
+		f.Get("/{name}", func(c Context) {
+			called = "placeholder:" + c.Param("name")
+		})
+
+		t.Run("predicate true picks regex leaf", func(t *testing.T) {
+			called = ""
+			resp := httptest.NewRecorder()
+			req, err := http.NewRequest(http.MethodGet, "/42", nil)
+			require.NoError(t, err)
+			req.Header.Set("X-Special", "yes")
+			f.ServeHTTP(resp, req)
+
+			assert.Equal(t, http.StatusOK, resp.Code)
+			assert.Equal(t, "regex:42", called)
+		})
+
+		t.Run("predicate false falls through to placeholder", func(t *testing.T) {
+			called = ""
+			resp := httptest.NewRecorder()
+			req, err := http.NewRequest(http.MethodGet, "/42", nil)
+			require.NoError(t, err)
+			f.ServeHTTP(resp, req)
+
+			assert.Equal(t, http.StatusOK, resp.Code)
+			assert.Equal(t, "placeholder:42", called)
+		})
+	})
+
+	t.Run("predicate false on only candidate yields not found", func(t *testing.T) {
+		f := New()
+		f.Get("/", func() {}).Match(func(*http.Request) bool { return false })
+
+		resp := httptest.NewRecorder()
+		req, err := http.NewRequest(http.MethodGet, "/", nil)
+		require.NoError(t, err)
+		f.ServeHTTP(resp, req)
+
+		assert.Equal(t, http.StatusNotFound, resp.Code)
+	})
+
+	t.Run("multiple predicates AND together", func(t *testing.T) {
+		f := New()
+		f.Get("/", func() {}).
+			Match(func(r *http.Request) bool { return r.Header.Get("A") == "1" }).
+			Match(func(r *http.Request) bool { return r.Header.Get("B") == "2" })
+
+		t.Run("both true", func(t *testing.T) {
+			resp := httptest.NewRecorder()
+			req, err := http.NewRequest(http.MethodGet, "/", nil)
+			require.NoError(t, err)
+			req.Header.Set("A", "1")
+			req.Header.Set("B", "2")
+			f.ServeHTTP(resp, req)
+			assert.Equal(t, http.StatusOK, resp.Code)
+		})
+
+		t.Run("first false", func(t *testing.T) {
+			resp := httptest.NewRecorder()
+			req, err := http.NewRequest(http.MethodGet, "/", nil)
+			require.NoError(t, err)
+			req.Header.Set("B", "2")
+			f.ServeHTTP(resp, req)
+			assert.Equal(t, http.StatusNotFound, resp.Code)
+		})
+
+		t.Run("second false", func(t *testing.T) {
+			resp := httptest.NewRecorder()
+			req, err := http.NewRequest(http.MethodGet, "/", nil)
+			require.NoError(t, err)
+			req.Header.Set("A", "1")
+			f.ServeHTTP(resp, req)
+			assert.Equal(t, http.StatusNotFound, resp.Code)
+		})
+	})
+
+	t.Run("combined with Headers both must pass", func(t *testing.T) {
+		f := New()
+		f.Get("/", func() {}).
+			Headers("Server", "Caddy").
+			Match(func(r *http.Request) bool { return r.Header.Get("Trace") == "on" })
+
+		t.Run("both pass", func(t *testing.T) {
+			resp := httptest.NewRecorder()
+			req, err := http.NewRequest(http.MethodGet, "/", nil)
+			require.NoError(t, err)
+			req.Header.Set("Server", "Caddy")
+			req.Header.Set("Trace", "on")
+			f.ServeHTTP(resp, req)
+			assert.Equal(t, http.StatusOK, resp.Code)
+		})
+
+		t.Run("header fails", func(t *testing.T) {
+			resp := httptest.NewRecorder()
+			req, err := http.NewRequest(http.MethodGet, "/", nil)
+			require.NoError(t, err)
+			req.Header.Set("Trace", "on")
+			f.ServeHTTP(resp, req)
+			assert.Equal(t, http.StatusNotFound, resp.Code)
+		})
+
+		t.Run("predicate fails", func(t *testing.T) {
+			resp := httptest.NewRecorder()
+			req, err := http.NewRequest(http.MethodGet, "/", nil)
+			require.NoError(t, err)
+			req.Header.Set("Server", "Caddy")
+			f.ServeHTTP(resp, req)
+			assert.Equal(t, http.StatusNotFound, resp.Code)
+		})
+	})
+
+	t.Run("predicate false on static route falls back to other route", func(t *testing.T) {
+		// Verifies the static fast path is bypassed when a predicate is attached.
+		f := New()
+		called := ""
+		f.Get("/admin", func() { called = "admin-internal" }).
+			Match(func(r *http.Request) bool { return r.Header.Get("X-Internal") == "1" })
+		f.Get("/{name}", func(c Context) { called = "fallback:" + c.Param("name") })
+
+		t.Run("predicate true takes static-shaped route", func(t *testing.T) {
+			called = ""
+			resp := httptest.NewRecorder()
+			req, err := http.NewRequest(http.MethodGet, "/admin", nil)
+			require.NoError(t, err)
+			req.Header.Set("X-Internal", "1")
+			f.ServeHTTP(resp, req)
+			assert.Equal(t, http.StatusOK, resp.Code)
+			assert.Equal(t, "admin-internal", called)
+		})
+
+		t.Run("predicate false falls through to placeholder", func(t *testing.T) {
+			called = ""
+			resp := httptest.NewRecorder()
+			req, err := http.NewRequest(http.MethodGet, "/admin", nil)
+			require.NoError(t, err)
+			f.ServeHTTP(resp, req)
+			assert.Equal(t, http.StatusOK, resp.Code)
+			assert.Equal(t, "fallback:admin", called)
+		})
+	})
+}
+
+func TestRoute_Name(t *testing.T) {
+	contextCreator := func(w http.ResponseWriter, r *http.Request, params route.Params, handlers []Handler, urlPath urlPather) internalContext {
+		return newMockContext()
+	}
+	r := newRouter(contextCreator)
+
+	r.Get("/", func() {}).Name("home")
+
+	t.Run("duplicated route name", func(t *testing.T) {
+		defer func() {
+			assert.Contains(t, recover(), "duplicated route name:")
+		}()
+		r.Get("/home", func() {}).Name("home")
+	})
+
+	t.Run("empty route name", func(t *testing.T) {
+		defer func() {
+			assert.Contains(t, recover(), "empty route name")
+		}()
+		r.Get("/404", func() {}).Name("")
+	})
+}
+
+func TestRouter_URLPath(t *testing.T) {
+	contextCreator := func(w http.ResponseWriter, r *http.Request, params route.Params, handlers []Handler, urlPath urlPather) internalContext {
+		return newMockContext()
+	}
+	r := newRouter(contextCreator)
+
+	t.Run("name not exists", func(t *testing.T) {
+		defer func() {
+			assert.Contains(t, recover(), "route with given name does not exist:")
+		}()
+		r.URLPath("404")
+	})
+
+	r.Get("/{owner}/{repo}/settings/?keys").Name("repo.settings")
+	tests := []struct {
+		name  string
+		pairs []string
+		want  string
+	}{
+		{
+			name:  "good",
+			pairs: []string{"owner", "flamego", "repo", "flamego"},
+			want:  "/flamego/flamego/settings",
+		},
+		{
+			name:  "missing last value",
+			pairs: []string{"owner", "flamego", "repo"},
+			want:  "/flamego/{repo}/settings",
+		},
+		{
+			name:  "withOptional",
+			pairs: []string{"owner", "flamego", "repo", "flamego", "withOptional", "true"},
+			want:  "/flamego/flamego/settings/keys",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := r.URLPath("repo.settings", test.pairs...)
+			assert.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestRouter_Group(t *testing.T) {
+	ctx := newMockContext()
+	contextCreator := func(w http.ResponseWriter, r *http.Request, params route.Params, handlers []Handler, urlPath urlPather) internalContext {
+		ctx.ParamFunc.SetDefaultHook(func(s string) string {
+			return params[s]
+		})
+		return ctx
+	}
+	r := newRouter(contextCreator)
+
+	r.Get("/home")
+	r.Group("/api", func() {
+		r.Group("/v1", func() {
+			r.Get("/users", func() {})
+		})
+		r.Get("/v2/users", func() {})
+	})
+	r.Get("/repos")
+
+	routes := []string{
+		"/home",
+		"/api/v1/users",
+		"/api/v2/users",
+		"/repos",
+	}
+	for _, route := range routes {
+		t.Run(route, func(t *testing.T) {
+			gotRoute := ""
+			ctx.run_ = func() { gotRoute = ctx.Param("route") }
+
+			resp := httptest.NewRecorder()
+			req, err := http.NewRequest(http.MethodGet, route, nil)
+			require.NoError(t, err)
+
+			r.ServeHTTP(resp, req)
+
+			assert.Equal(t, http.StatusOK, resp.Code)
+			assert.Equal(t, route, gotRoute)
+		})
+	}
+}
+
+func TestComboRoute(t *testing.T) {
+	ctx := newMockContext()
+	contextCreator := func(w http.ResponseWriter, r *http.Request, params route.Params, handlers []Handler, urlPath urlPather) internalContext {
+		ctx.ParamFunc.SetDefaultHook(func(s string) string {
+			return params[s]
+		})
+		return ctx
+	}
+	r := newRouter(contextCreator)
+
+	r.Combo("/").
+		Get(func() {}).
+		Patch(func() {}).
+		Post(func() {}).
+		Put(func() {}).
+		Delete(func() {}).
+		Options(func() {}).
+		Head(func() {}).
+		Connect(func() {}).
+		Trace(func() {})
+
+	for _, m := range httpMethods {
+		t.Run(m, func(t *testing.T) {
+			gotRoute := ""
+			ctx.run_ = func() { gotRoute = ctx.Param("route") }
+
+			resp := httptest.NewRecorder()
+			req, err := http.NewRequest(m, "/", nil)
+			require.NoError(t, err)
+
+			r.ServeHTTP(resp, req)
+
+			assert.Equal(t, http.StatusOK, resp.Code)
+			assert.Equal(t, "/", gotRoute)
+		})
+	}
+}
+
+// BenchmarkRouter_ServeHTTP_NoMatch exercises a placeholder route that does
+// not have any Match predicate attached, to detect regressions on the common
+// path from threading *http.Request through tree matching.
+func BenchmarkRouter_ServeHTTP_NoMatch(b *testing.B) {
+	f := New()
+	f.Get("/users/{id}", func() {})
+
+	req, err := http.NewRequest(http.MethodGet, "/users/42", nil)
+	require.NoError(b, err)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// A fresh recorder per iteration so accumulated state (wroteHeader,
+		// Body, Code) does not skew alloc/timing measurements.
+		f.ServeHTTP(httptest.NewRecorder(), req)
+	}
+}
+
+// BenchmarkRouter_ServeHTTP_WithMatch exercises a placeholder route guarded
+// by a Match predicate, as a comparison point for the no-Match baseline.
+func BenchmarkRouter_ServeHTTP_WithMatch(b *testing.B) {
+	f := New()
+	f.Get("/users/{id}", func() {}).Match(func(*http.Request) bool { return true })
+
+	req, err := http.NewRequest(http.MethodGet, "/users/42", nil)
+	require.NoError(b, err)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		f.ServeHTTP(httptest.NewRecorder(), req)
+	}
+}
